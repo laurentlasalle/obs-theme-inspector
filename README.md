@@ -18,6 +18,8 @@ Your files, settings and pending changes are kept in the browser for next time. 
 - **Hover** an element of the mock-up: the **Element** tab shows its Qt class and ancestors, its `objectName` (what `#name` targets), its `class` property (what `.name` targets), and every rule that reaches it, with variables resolved.
 - **Ctrl + click** (**⌘ + click** on a Mac) pins the selection, so you can scroll through its rules. Do it again to release it.
 - Click a **rule's header** to highlight every element it targets.
+- For a sub-control such as `::item`, **Inherited from …** shows the rules of its widget that give it its font and colour: Qt draws sub-controls with their widget's font and colour.
+- **Computed** lists the final value of the main properties (font, colours, background, borders, padding, margin, sizes) and where each one comes from: a rule, the widget it inherits from, or Qt's defaults. Click a source to jump to its rule; click a value to set that property in a new rule for the element, or in one of the rules that already target it.
 - **Force states** previews `:hover`, `:pressed`, `:checked`, `:selected` and others without the mouse.
 - Rules are listed from the one applied last (the strongest) to the first. Declarations overridden by a later rule are struck through.
 - The **Variables** tab lists every `@OBSThemeVars` variable with its final value and where it was defined.

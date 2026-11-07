@@ -165,6 +165,9 @@ body.dragging .dropzone { display: grid; }
 
 #stage [data-t~="QAbstractScrollArea"] { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 #stage [data-viewport] { flex: 1; overflow: auto; display: flex; flex-direction: column; }
+/* Qt draws a view's items with the view's own font and colour, not the viewport's:
+ * let them pass through. (!important beats any normal declaration of a theme.) */
+#stage [data-viewport] { font: inherit !important; color: inherit !important; text-transform: inherit !important; }
 #stage [data-sc="item"] { display: flex; align-items: center; flex: none; cursor: default; }
 
 #stage [data-t~="QToolBar"] { flex: none; }
@@ -381,3 +384,32 @@ table.diff .sign { display: inline-block; width: 1.2em; color: #8b949e; user-sel
 table.diff tr.del .sign { color: #ffa198; }
 table.diff tr.add .sign { color: #7ee787; }
 table.diff.split td.tx { width: 49%; }
+
+/* Inherited rules and computed values */
+.rule.inherited { border-style: dashed; }
+.rule.flash { animation: flash 1.2s ease-out; }
+@keyframes flash { from { box-shadow: 0 0 0 2px var(--ui-accent); } to { box-shadow: 0 0 0 2px transparent; } }
+
+.computed { font: 12px/1.6 var(--ui-mono); border: 1px solid var(--ui-line); border-radius: 5px; padding: 4px 8px; background: var(--ui-panel-2); }
+.c-row { display: grid; grid-template-columns: 9.5em minmax(8em, 1fr) minmax(8em, 1.3fr); gap: 8px; border-bottom: 1px solid #2a2d32; }
+.c-row:last-child { border-bottom: none; }
+.c-prop { color: #82aaff; }
+.c-val { overflow-wrap: anywhere; }
+.c-val.editable { cursor: pointer; }
+.c-val.editable:hover { color: var(--ui-accent); }
+.c-src { color: var(--ui-dim); font-size: 11px; overflow-wrap: anywhere; }
+a.c-src { cursor: pointer; text-decoration: underline dotted; }
+a.c-src:hover { color: var(--ui-accent); }
+.c-row.default .c-prop, .c-row.default .c-val { opacity: 0.6; }
+
+.chooser { margin: 4px 0 8px; padding: 6px; border: 1px solid var(--ui-accent); border-radius: 5px; background: #16202e; display: grid; gap: 4px; }
+.chooser-title { font: 12px system-ui, sans-serif; color: var(--ui-dim); }
+.chooser .choice {
+  display: flex; justify-content: space-between; gap: 10px; text-align: left;
+  background: var(--ui-panel-2); color: var(--ui-text); border: 1px solid var(--ui-line); border-radius: 4px;
+  padding: 3px 8px; font: 12px var(--ui-mono); cursor: pointer;
+}
+.chooser .choice:hover, .chooser .choice:focus { border-color: var(--ui-accent); outline: none; }
+.chooser .choice.default { border-color: #2f5a39; }
+.chooser .choice small { color: var(--ui-dim); font: 11px system-ui, sans-serif; white-space: nowrap; }
+.chooser .mini { justify-self: end; }
