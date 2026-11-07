@@ -42,10 +42,12 @@
    * Parses QSS rules. `text` must already have its comments blanked out.
    * Returns [{ selectorText, selectors: [string], line, decls: [{ prop, value, line }] }].
    */
-  function parseRules(text, lineOffset) {
+  function parseRules(text, lineOffset, baseOffset = 0) {
     const rules = [];
     let i = 0;
     const lineAt = idx => lineOffset + text.slice(0, idx).split('\n').length - 1;
+    // Absolute offsets in the original file, used to write edits back.
+    const abs = idx => baseOffset + idx;
     while (i < text.length) {
       const open = text.indexOf('{', i);
       if (open < 0) break;
@@ -62,8 +64,15 @@
         const prop = part.text.slice(0, idx).trim();
         const value = part.text.slice(idx + 1).trim();
         if (!prop) continue;
-        const declPos = open + 1 + part.start + part.text.search(/\S/);
-        decls.push({ prop, value, line: lineAt(declPos) });
+        const partStart = open + 1 + part.start;
+        const declPos = partStart + part.text.search(/\S/);
+        const rawValue = part.text.slice(idx + 1);
+        const valueStart = partStart + idx + 1 + (rawValue.length - rawValue.trimStart().length);
+        const valueEnd = partStart + part.text.trimEnd().length;
+        const end = partStart + part.text.length; // the ";" (or the "}")
+        decls.push({ prop, value, line: lineAt(declPos),
+                     start: abs(declPos), valueStart: abs(valueStart), valueEnd: abs(valueEnd), end: abs(end),
+                     hasSemicolon: text[end] === ';' });
       }
       if (selectorText && !selectorText.startsWith('@')) {
         rules.push({
@@ -71,6 +80,9 @@
           selectors: splitTopLevel(selectorText, ',').map(p => p.text.trim()).filter(Boolean),
           line: lineAt(selStart),
           decls,
+          start: abs(selStart),
+          open: abs(open),
+          close: abs(close),
         });
       }
       i = close + 1;
@@ -314,7 +326,7 @@
       const clean = E.stripComments(src.text);
       const body = clean.slice(src.offset);
       const lineOffset = clean.slice(0, src.offset).split('\n').length;
-      const rules = parseRules(body, lineOffset);
+      const rules = parseRules(body, lineOffset, src.offset);
       const out = [];
       for (const rule of rules) {
         const decls = rule.decls.map(d => {
@@ -324,7 +336,7 @@
           const ctx = { resolveUrl, note: msg => notes.push(msg), customProps };
           const css = translateDecl(d.prop, resolved, ctx);
           if (missing.length) notes.unshift(`Unknown variable: --${missing.join(', --')}`);
-          return { prop: d.prop, value: d.value, resolved, line: d.line, css, notes };
+          return Object.assign({}, d, { resolved, css, notes });
         });
         for (const sel of rule.selectors) {
           let t;
@@ -336,8 +348,9 @@
           }
           const layer = layerName(t.spec);
           layers.add(layer);
-          const r = { file: src.path, fileIndex, line: rule.line, selector: sel, ruleText: rule.selectorText,
-                      css: t.css, spec: t.spec, layer, order: order++, subcontrol: t.subcontrol, decls };
+          const r = { file: src.path, fileIndex, origin: src.origin, line: rule.line, selector: sel,
+                      ruleText: rule.selectorText, source: rule, css: t.css, spec: t.spec, layer,
+                      order: order++, subcontrol: t.subcontrol, decls };
           allRules.push(r);
           const body = decls.flatMap(d => d.css).map(c => `  ${c.prop}: ${c.value};`).join('\n');
           if (body) out.push(`@layer ${layer} {\n/* ${src.path}:${rule.line}  ${sel} */\n:where(${t.css}) {\n${body}\n}\n}`);

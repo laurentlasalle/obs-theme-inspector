@@ -11,7 +11,7 @@ OBS draws its interface with Qt, whose style sheets look like CSS but run outsid
 3. Pick a theme in the **Theme** menu. The themes bundled with OBS 32.2.1 (Yami and its variants) are always available.
 4. To inspect your own theme, click **Add folder…** and choose the folder holding your theme files, or drag them onto the page. Bring the image folders too (for example `LJCS/popout.svg`), so `url(theme:…)` icons can be found.
 
-Your files and settings are kept in the browser for next time. **Remove my files** forgets them.
+Your files, settings and pending changes are kept in the browser for next time. **Remove my files** forgets your files and the changes made to them.
 
 ### Inspecting
 
@@ -24,6 +24,31 @@ Your files and settings are kept in the browser for next time. **Remove my files
 - The **Problems** tab lists what OBS would ignore or could not find: missing images, unknown variables, invalid selectors.
 - **Font Size**, **Density** and **System** reproduce the settings that feed `obsFontScale`, `obsPadding` and the `--os_win_*` / `--os_mac_*` / `--os_lin_*` variables. **Zoom** helps compare with screenshots taken at 150 % or 200 % display scaling.
 - The browser's own inspector works too (right-click › **Inspect**): each theme file is a separate style sheet, named after the file, and every translated rule keeps its original selector and line number in a comment.
+
+## Editing
+
+Click a value in the **Element** or **Variables** tab to change it. The mock-up updates while you type, and every element the rule targets is highlighted: in Qt, a change applies to a rule, never to a single element. Up and Down arrows step the first number of a value (Shift: by 10, Alt: by 0.1); Enter keeps the value, Escape restores it.
+
+- **+ property** adds a property to a rule; **+ New rule** creates a rule for the selected element, with a suggested selector you can adjust.
+- The checkbox next to a declaration of your own file disables it.
+- **↺** reverts a change; **✕** removes a property or a rule you added.
+
+Your files are never modified, and nothing leaves the page until you ask for it in the **Changes** tab.
+
+### Where changes go
+
+- **Rules of your own file** are changed where they are.
+- **Rules of a parent theme** (for example `Yami.obt`) are not touched: a rule with the same selectors and only the changed properties is added at the end of your file. It has the same specificity and comes later in the chain, so it wins, exactly as in OBS.
+- **Variables** are changed in, or added to, the `@OBSThemeVars` block of your file.
+- When the theme you edit comes with OBS (Yami, Yami Classic …), the changes go to a **new variant** that extends it, since OBS replaces its own files at every update. Its name, ID, file name and author can be set in the **Changes** tab.
+
+### Getting the result
+
+The **Changes** tab lists every change, each with its own revert button, and offers three outputs:
+
+- **Edited file**: the complete file, to copy or download.
+- **Block to append**: only the changes, written as rules to paste at the end of your file; deleting the block undoes them. OBS only reads the first `@OBSThemeVars` block of a file, so changed variables are listed apart, to be replaced by hand.
+- **Comparison**: the original and the edited file line by line, removed lines in red and added lines in green, in one column or side by side, with a **Copy as patch** button.
 
 ## How faithful is it?
 

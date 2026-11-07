@@ -49,6 +49,18 @@
     return tok;
   }
 
+  /** Position of the first @OBSThemeVars block: start (after "{") and end (the "}"), or null. */
+  function varsBlock(text) {
+    const b = findBlock(stripComments(text), 'OBSThemeVars');
+    return b ? { start: b.start, end: b.end } : null;
+  }
+
+  /** Position right after the @OBSThemeMeta block, or 0. */
+  function metaBlockEnd(text) {
+    const b = findBlock(stripComments(text), 'OBSThemeMeta');
+    return b ? b.end + 1 : 0;
+  }
+
   /** Content of the first `@Name { ... }` block, or null. */
   function findBlock(text, name) {
     const re = new RegExp('@' + name + '\\s*\\{', 'g');
@@ -193,7 +205,13 @@
 
       const tokens = tokenize(m[2]);
       const line = lineOf(declStart + raw.search(/\S/));
-      const v = { name, key, file, line, suffix: '', editable: false };
+      // Positions in the original text, used to write edited values back.
+      const colon = raw.indexOf(':');
+      const afterColon = raw.slice(colon + 1);
+      const valueStart = declStart + colon + 1 + (afterColon.length - afterColon.trimStart().length);
+      const valueEnd = declStart + raw.trimEnd().length;
+      const v = { name, key, file, line, suffix: '', editable: false, text: m[2],
+                  declStart: declStart + raw.search(/\S/), valueStart, valueEnd };
       const t0 = tokens[0];
       let next = 1;
       if (t0 === undefined) continue;
@@ -430,7 +448,9 @@
   }
 
   /**
-   * Compiles a theme. options: { fontScale, density (padding value), os, highContrast }.
+   * Compiles a theme. options: { fontScale, density (padding value), os, highContrast,
+   *   textOverrides: Map(path -> text) to compile an edited copy of a file,
+   *   extraSource: { path, text } appended last (a new variant being created) }.
    * Returns { chain, vars, replacements, sources: [{ theme, path, text, offset }], usesFontScale,
    *           usesDensity, warnings }.
    */
@@ -449,11 +469,17 @@
     vars.set('obsPadding', { name: 'obsPadding', type: VarType.Number, value: options.density, suffix: '', file: 'OBS', line: 0 });
 
     const sources = [];
+    const overrides = options.textOverrides || new Map();
+    const addSource = (theme, path, text, origin) => {
+      for (const v of parseVars(text, options.os, warnings, path)) vars.set(v.name, v);
+      sources.push({ theme, path, text, origin, offset: endOfObsMetadata(text) });
+    };
     for (const tid of ids) {
       const t = themeSet.themes.get(tid);
-      for (const v of parseVars(t.file.text, options.os, warnings, t.file.path)) vars.set(v.name, v);
-      sources.push({ theme: t, path: t.file.path, text: t.file.text, offset: endOfObsMetadata(t.file.text) });
+      const text = overrides.has(t.file.path) ? overrides.get(t.file.path) : t.file.text;
+      addSource(t, t.file.path, text, t.file.origin);
     }
+    if (options.extraSource) addSource(null, options.extraSource.path, options.extraSource.text, 'new');
 
     let usesFontScale = false, usesDensity = false;
     for (const v of vars.values()) {
@@ -496,6 +522,6 @@
   window.OTI = window.OTI || {};
   window.OTI.engine = {
     VarType, stripComments, parseMeta, parseVars, buildThemeSet, compileTheme, substitute,
-    palette, endOfObsMetadata, densityValues: { Classic: 0.25, Compact: 2, Normal: 4, Comfortable: 6 },
+    palette, endOfObsMetadata, varsBlock, metaBlockEnd, densityValues: { Classic: 0.25, Compact: 2, Normal: 4, Comfortable: 6 },
   };
 })();

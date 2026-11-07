@@ -59,12 +59,14 @@
     <nav class="tabs">
       <button type="button" class="active" data-tab="tab-element">Element</button>
       <button type="button" data-tab="tab-vars">Variables</button>
+      <button type="button" data-tab="tab-changes">Changes<span id="change-count" class="count changes"></span></button>
       <button type="button" data-tab="tab-problems">Problems<span id="problem-count" class="count"></span></button>
     </nav>
     <section id="tab-element" class="tab-body"></section>
     <section id="tab-vars" class="tab-body" hidden>
       <input id="var-filter" type="search" placeholder="Filter variables" style="width:100%;margin-bottom:8px">
     </section>
+    <section id="tab-changes" class="tab-body" hidden></section>
     <section id="tab-problems" class="tab-body" hidden></section>
   </aside>
 </main>
@@ -76,6 +78,9 @@
 <script src="app/theme-engine.js"></script>
 <script src="app/qss-to-css.js"></script>
 <script src="app/mock.js"></script>
+<script src="app/editor.js"></script>
 <script src="app/main.js"></script>
+<script src="app/inspector.js"></script>
+<script src="app/changes.js"></script>
 </body>
 </html>

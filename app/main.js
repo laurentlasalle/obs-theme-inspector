@@ -1,6 +1,9 @@
 /*
- * OBS Theme Inspector — page logic: files, theme compilation, icons and
- * the inspector panel.
+ * OBS Theme Inspector — page core: files, theme compilation with the
+ * pending edits, icons, highlight boxes and controls.
+ *
+ * The Element tab lives in inspector.js; the Variables and Changes tabs in
+ * changes.js. They share the `OTI.app` object defined here.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -10,20 +13,25 @@
   const E = window.OTI.engine;
   const Q = window.OTI.qss;
   const M = window.OTI.mock;
+  const ED = window.OTI.editor;
   const $ = sel => document.querySelector(sel);
 
   const STORAGE_KEY = 'oti.userFiles.v1';
   const SETTINGS_KEY = 'oti.settings.v1';
+  const EDITS_KEY = 'oti.edits.v1';
 
   const state = {
     bundle: window.OTI.bundles[0],
-    userFiles: new Map(),       // path -> { path, text | dataUrl, origin: 'user' }
+    userFiles: new Map(),       // path -> { path, content, origin: 'user' }
     themeSet: null,
     compiled: null,
     css: null,
+    gen: null,                  // edited target file and how its lines map to the original
     selected: null,             // element shown in the inspector
     locked: false,
-    settings: { themeId: 'com.obsproject.Yami.Classic', fontScale: 10, density: 4, os: 'win', zoom: 1, highContrast: false },
+    settings: { themeId: 'com.obsproject.Yami.Classic', fontScale: 10, density: 4, os: 'win', zoom: 1,
+                highContrast: false, author: '' },
+    editsByTheme: {},           // theme id -> edits (see editor.js)
     registered: new Set(),
     urlCache: new Map(),
   };
@@ -37,6 +45,7 @@
       if (s) Object.assign(state.settings, s);
       const files = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
       for (const f of files) state.userFiles.set(f.path, f);
+      state.editsByTheme = JSON.parse(localStorage.getItem(EDITS_KEY) || '{}');
     } catch (e) { /* storage unavailable: start fresh */ }
   }
 
@@ -44,6 +53,7 @@
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
       localStorage.setItem(STORAGE_KEY, JSON.stringify([...state.userFiles.values()]));
+      localStorage.setItem(EDITS_KEY, JSON.stringify(state.editsByTheme));
     } catch (e) { /* quota or file:// restrictions: keep working without saving */ }
   }
 
@@ -87,7 +97,7 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /* Theme compilation and application                                   */
+  /* Themes                                                              */
 
   function allThemeFiles() {
     const files = [];
@@ -113,8 +123,7 @@
     const select = $('#theme');
     select.textContent = '';
     const themes = [...state.themeSet.themes.values()].filter(t => t.isVisible && !t.isHighContrast);
-    const bases = themes.filter(t => t.isBaseTheme);
-    for (const base of bases) {
+    for (const base of themes.filter(t => t.isBaseTheme)) {
       const group = document.createElement('optgroup');
       group.label = base.name;
       const own = document.createElement('option');
@@ -135,6 +144,90 @@
     select.value = state.settings.themeId;
   }
 
+  function currentTheme() {
+    return state.themeSet.themes.get(state.settings.themeId);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Edits of the current theme                                          */
+
+  function edits() {
+    const id = state.settings.themeId;
+    if (!state.editsByTheme[id]) state.editsByTheme[id] = ED.emptyEdits(id);
+    const ed = state.editsByTheme[id];
+    const theme = currentTheme();
+    // The target follows the theme: the user's own file, or a new variant.
+    if (theme && (!ed.target || (theme.file.origin === 'user') !== (ed.target.kind === 'user'))) {
+      ed.target = ED.defaultTarget(theme, state.settings.author);
+    }
+    return ed;
+  }
+
+  function editCount(ed = edits()) {
+    return ed.decls.length + ed.added.length + ed.rules.length + ed.vars.length;
+  }
+
+  /** Forgets the edits aimed at a file whose content changed or was removed. */
+  function dropEditsFor(path) {
+    for (const [id, ed] of Object.entries(state.editsByTheme)) {
+      if (ed.target && ed.target.kind === 'user' && ed.target.path === path) delete state.editsByTheme[id];
+    }
+  }
+
+  /** Builds the edited target file, or the untouched one when nothing changed. */
+  function generateTarget() {
+    const theme = currentTheme();
+    const ed = edits();
+    const target = ed.target;
+    const path = ED.targetPath(target);
+    const originalText = target.kind === 'user' ? theme.file.text : ED.newVariantText(target);
+    const targetVars = new Map(target.kind === 'user'
+      ? E.parseVars(originalText, state.settings.os, [], path).map(v => [v.name, v]) : []);
+    const ruleInfo = key => {
+      const [file, line, ...rest] = key.split('|');
+      return { file, line: +line, ruleText: rest.join('|') };
+    };
+    const has = editCount(ed) > 0;
+    const out = has
+      ? ED.generate(ed, { originalText, targetPath: path, ruleInfo, targetVars })
+      : { text: originalText, appended: [], appendBlock: '', varLines: [] };
+    const diff = ED.diffLines(originalText, out.text);
+
+    // The target's own rules, as written in the original file.
+    const ownRules = new Map();
+    const clean = E.stripComments(originalText);
+    const offset = E.endOfObsMetadata(originalText);
+    const lineOffset = clean.slice(0, offset).split('\n').length;
+    for (const r of Q.parseRules(clean.slice(offset), lineOffset, offset)) {
+      ownRules.set(ED.ruleKey(path, r.line, r.selectorText), r);
+    }
+    return Object.assign(out, { target, path, originalText, diff, lineMap: ED.lineMap(diff), ownRules,
+                                hasEdits: has, ruleInfo, targetVars });
+  }
+
+  /**
+   * Tells where a compiled rule comes from, for editing:
+   *   parent   a rule of a file above the target (edits become overriding rules)
+   *   own      a rule written in the target file
+   *   override a rule added by the tool to override a parent rule
+   *   rule     a new rule added by the user
+   */
+  function identifyRule(r) {
+    const g = state.gen;
+    if (!g || r.file !== g.path) return { kind: 'parent', key: ED.ruleKey(r.file, r.line, r.ruleText) };
+    const orig = g.lineMap.get(r.line);
+    if (orig != null) {
+      const key = ED.ruleKey(g.path, orig, r.ruleText);
+      if (g.ownRules.has(key)) return { kind: 'own', key, rule: g.ownRules.get(key) };
+    }
+    const a = g.appended.find(x => r.line > x.line && r.line < x.line + x.lines);
+    if (a) return Object.assign({ kind: a.ref.kind }, a.ref);
+    return { kind: 'unknown' };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Compilation                                                         */
+
   function registerCustomProps(names) {
     if (!window.CSS || !CSS.registerProperty) return;
     for (const name of names) {
@@ -147,15 +240,23 @@
     }
   }
 
-  function applyTheme() {
+  /**
+   * Compiles the theme with its edits and restyles the mock-up.
+   * `live` skips re-rendering the panels (used while a value is being typed).
+   */
+  function applyTheme(live) {
     const s = state.settings;
     let compiled;
     try {
-      compiled = E.compileTheme(state.themeSet, s.themeId, {
-        fontScale: s.fontScale, density: s.density, os: s.os, highContrast: s.highContrast,
-      });
+      state.gen = generateTarget();
+      const g = state.gen;
+      const options = { fontScale: s.fontScale, density: s.density, os: s.os, highContrast: s.highContrast };
+      if (g.hasEdits && g.target.kind === 'user') options.textOverrides = new Map([[g.path, g.text]]);
+      if (g.hasEdits && g.target.kind === 'new') options.extraSource = { path: g.path, text: g.text };
+      compiled = E.compileTheme(state.themeSet, s.themeId, options);
     } catch (e) {
-      showProblems([{ file: '', msg: e.message, level: 'error' }]);
+      console.error(e);
+      app.showProblems([{ file: '', msg: e.message, level: 'error' }]);
       return;
     }
     const css = Q.compileCss(compiled, resolveUrl);
@@ -187,8 +288,14 @@
     $('#density').disabled = !compiled.usesDensity;
     $('#font-scale-label').classList.toggle('disabled', !compiled.usesFontScale);
     $('#density-label').classList.toggle('disabled', !compiled.usesDensity);
+    const n = editCount();
+    $('#change-count').textContent = n ? ` (${n})` : '';
 
-    requestAnimationFrame(() => { applyIcons(); renderInspector(); renderVariables(); renderProblems(); });
+    requestAnimationFrame(() => {
+      applyIcons();
+      if (state.selected) select(state.selected);
+      if (!live) app.renderAll();
+    });
     saveStored();
   }
 
@@ -207,26 +314,26 @@
 
   function applyIcons() {
     const stage = $('#stage');
-    for (const el of stage.querySelectorAll('[data-icon-default]')) {
-      const cs = getComputedStyle(el);
+    for (const node of stage.querySelectorAll('[data-icon-default]')) {
+      const cs = getComputedStyle(node);
       const url = cssUrl(cs.getPropertyValue('--qp-icon')) || cssUrl(cs.getPropertyValue('--q-icon')) ||
-                  resolveUrl(el.dataset.iconDefault);
-      const size = sizeOf(cs.getPropertyValue('--q-icon-size'), +el.dataset.iconSize);
-      setIcon(el.querySelector(':scope > .q-icon'), url, size);
+                  resolveUrl(node.dataset.iconDefault);
+      const size = sizeOf(cs.getPropertyValue('--q-icon-size'), +node.dataset.iconSize);
+      setIcon(node.querySelector(':scope > .q-icon'), url, size);
     }
-    for (const el of stage.querySelectorAll('[data-icon-from]')) {
+    for (const node of stage.querySelectorAll('[data-icon-from]')) {
       // Dock title buttons take their icon from the dock (titlebar-*-icon).
-      const owner = el.parentElement;
-      const url = cssUrl(getComputedStyle(owner).getPropertyValue('--q-' + el.dataset.iconFrom));
-      const size = sizeOf(getComputedStyle(el).getPropertyValue('--q-icon-size'), +el.dataset.iconSize);
-      setIcon(el.querySelector(':scope > .q-icon'), url || resolveUrl(':/res/images/' +
-        (el.dataset.iconFrom.includes('close') ? 'close.svg' : 'popout.svg')), size);
+      const owner = node.parentElement;
+      const url = cssUrl(getComputedStyle(owner).getPropertyValue('--q-' + node.dataset.iconFrom));
+      const size = sizeOf(getComputedStyle(node).getPropertyValue('--q-icon-size'), +node.dataset.iconSize);
+      setIcon(node.querySelector(':scope > .q-icon'), url || resolveUrl(':/res/images/' +
+        (node.dataset.iconFrom.includes('close') ? 'close.svg' : 'popout.svg')), size);
     }
-    for (const el of stage.querySelectorAll('[data-sc], [data-t]')) {
-      const url = cssUrl(getComputedStyle(el).getPropertyValue('--q-image'));
-      let img = el.querySelector(':scope > .q-image');
+    for (const node of stage.querySelectorAll('[data-sc], [data-t]')) {
+      const url = cssUrl(getComputedStyle(node).getPropertyValue('--q-image'));
+      let img = node.querySelector(':scope > .q-image');
       if (!url && !img) continue;
-      if (!img) { img = document.createElement('span'); img.className = 'q-image'; el.prepend(img); }
+      if (!img) { img = document.createElement('span'); img.className = 'q-image'; node.prepend(img); }
       if (url) {
         img.textContent = ' ';
         img.style.backgroundImage = `url("${url}")`;
@@ -251,14 +358,14 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /* Highlight boxes                                                     */
+  /* Highlight boxes and selection                                       */
 
   function clearBoxes(kind) {
     for (const b of document.querySelectorAll(kind ? `.hl.${kind}, .hl-label.${kind}` : '.hl, .hl-label')) b.remove();
   }
 
-  function box(el, kind, label) {
-    const r = el.getBoundingClientRect();
+  function box(node, kind, label) {
+    const r = node.getBoundingClientRect();
     const b = document.createElement('div');
     b.className = 'hl ' + kind;
     Object.assign(b.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
@@ -272,197 +379,50 @@
     }
   }
 
-  function describe(el) {
-    if (el.dataset.sc) {
-      const owner = ownerWidget(el);
-      return `${owner ? owner.dataset.type : '?'}::${el.dataset.sc}`;
-    }
-    let s = el.dataset.type;
-    if (el.dataset.name) s += '#' + el.dataset.name;
-    if (el.dataset.clsProp) s += '.' + el.dataset.clsProp.split(' ').join('.');
-    return s;
-  }
-
-  function ownerWidget(el) {
-    let p = el.parentElement;
+  function ownerWidget(node) {
+    let p = node.parentElement;
     while (p && (p.dataset.viewport !== undefined || !p.dataset.t)) p = p.parentElement;
     return p;
   }
 
-  /* ------------------------------------------------------------------ */
-  /* Inspector: element, matching rules                                  */
+  function describe(node) {
+    if (node.dataset.sc) {
+      const owner = ownerWidget(node);
+      return `${owner ? owner.dataset.type : '?'}::${node.dataset.sc}`;
+    }
+    let s = node.dataset.type;
+    if (node.dataset.name) s += '#' + node.dataset.name;
+    if (node.dataset.clsProp) s += '.' + node.dataset.clsProp.split(' ').join('.');
+    return s;
+  }
 
   function inspectable(target) {
     return target && target.closest && target.closest('#stage [data-sc], #stage [data-t]');
   }
 
-  function select(el, lock) {
-    state.selected = el;
+  function select(node, lock) {
+    const changed = node !== state.selected;
+    state.selected = node;
     if (lock !== undefined) state.locked = lock;
     clearBoxes('hover');
     clearBoxes('locked');
-    if (el) box(el, state.locked ? 'locked' : 'hover', describe(el));
-    renderInspector();
+    if (node && document.contains(node)) box(node, state.locked ? 'locked' : 'hover', describe(node));
+    if (changed || lock !== undefined) app.renderInspector();
   }
 
-  function matchingRules(el) {
-    if (!state.css) return [];
-    const layerIndex = new Map(state.css.layers.map((l, i) => [l, i]));
+  /** Highlights every element a compiled rule targets; returns how many. */
+  function rulesTargets(rule) {
     const out = [];
-    for (const r of state.css.rules) {
-      let ok = false;
-      try { ok = el.matches(r.css); } catch (e) { ok = false; }
-      if (ok) out.push(r);
+    for (const node of $('#stage').querySelectorAll('[data-t], [data-sc]')) {
+      try { if (node.matches(rule.css)) out.push(node); } catch (e) { /* ignore */ }
     }
-    out.sort((a, b) => (layerIndex.get(a.layer) - layerIndex.get(b.layer)) || (a.order - b.order));
     return out;
   }
 
-  function el(tag, attrs = {}, ...children) {
-    const e = document.createElement(tag);
-    for (const [k, v] of Object.entries(attrs)) {
-      if (k === 'class') e.className = v;
-      else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
-      else e.setAttribute(k, v);
-    }
-    for (const c of children) if (c != null) e.append(c);
-    return e;
-  }
-
-  const STATE_TOGGLES = ['hover', 'pressed', 'focus', 'checked', 'selected', 'disabled'];
-
-  function renderInspector() {
-    const body = $('#tab-element');
-    body.textContent = '';
-    const target = state.selected;
-    if (!target || !document.contains(target)) {
-      body.append(el('p', { class: 'hint' },
-        'Hover an element of the mock-up to see the rules that style it. ',
-        el('kbd', {}, 'Ctrl'), ' + click (', el('kbd', {}, '⌘'), ' + click on a Mac) pins the selection; do it again to release it. ',
-        'Right-click › Inspect also works: each theme file appears under its own name in the browser’s Styles pane.'));
-      return;
-    }
-
-    // Breadcrumb of Qt ancestors.
-    const chain = [];
-    for (let p = target; p && p.id !== 'stage'; p = p.parentElement) if (p.dataset.t || p.dataset.sc) chain.unshift(p);
-    const crumbs = el('div', { class: 'crumbs' });
-    chain.forEach((node, i) => {
-      if (i) crumbs.append(el('span', { class: 'sep' }, '›'));
-      crumbs.append(el('a', { class: node === target ? 'current' : '', onclick: () => select(node, true) }, describe(node)));
-    });
-    body.append(crumbs);
-
-    const widget = target.dataset.t ? target : ownerWidget(target);
-    const facts = el('dl', { class: 'facts' });
-    const fact = (k, v) => { if (v) facts.append(el('dt', {}, k), el('dd', {}, v)); };
-    if (target.dataset.sc) fact('Sub-control', `::${target.dataset.sc} of ${describe(widget)}`);
-    fact('Qt class', widget.dataset.t.split(' ').join(' → '));
-    fact('objectName', widget.dataset.name ? '#' + widget.dataset.name : '(none)');
-    fact('class property', widget.dataset.clsProp ? widget.dataset.clsProp.split(' ').map(c => '.' + c).join(' ') : '(none)');
-    const props = [...widget.attributes].filter(a => a.name.startsWith('data-p-')).map(a => `${a.name.slice(7)}=${a.value}`);
-    fact('Properties', props.join('  '));
-    body.append(facts);
-
-    // State toggles, to preview :hover, :checked … without the mouse.
-    const states = el('div', { class: 'states' });
-    for (const s of STATE_TOGGLES) {
-      const cb = el('input', { type: 'checkbox' });
-      cb.checked = M.hasState(target, s);
-      cb.addEventListener('change', () => {
-        cb.checked ? M.addState(target, s) : M.removeState(target, s);
-        scheduleIcons();
-        renderInspector();
-      });
-      states.append(el('label', {}, cb, ':' + s));
-    }
-    body.append(el('h2', {}, 'Force states'), states);
-
-    // Matching rules, in the order Qt applies them.
-    const rules = matchingRules(target);
-    body.append(el('h2', {}, `Matching rules (${rules.length}), in application order`));
-    if (!rules.length) body.append(el('p', { class: 'hint' }, 'No rule of this theme targets this element: Qt draws it with its own style and the palette.'));
-    const winner = new Map();
-    rules.forEach((r, ri) => r.decls.forEach((d, di) => { if (d.css.length) winner.set(d.prop.toLowerCase(), `${ri}:${di}`); }));
-    for (let ri = rules.length - 1; ri >= 0; ri--) {
-      const r = rules[ri];
-      const head = el('div', { class: 'rule-head', title: 'Highlight every element this rule targets',
-                               onclick: () => highlightRule(r) },
-        el('span', {}, el('span', { class: 'rule-sel' }, r.selector), ' ',
-           el('span', { class: 'rule-spec' }, `(${r.spec.join(',')})`)),
-        el('span', { class: 'rule-src' }, `${r.file}:${r.line}`));
-      const decls = el('div', { class: 'decls' });
-      r.decls.forEach((d, di) => {
-        const overridden = winner.get(d.prop.toLowerCase()) !== `${ri}:${di}`;
-        const line = el('div', { class: 'decl' + (overridden ? ' overridden' : '') },
-          el('span', { class: 'p' }, d.prop), ': ', el('span', { class: 'v' }, d.value), ';');
-        if (d.resolved !== d.value) line.append(' ', el('span', { class: 'r' }, '→ ' + d.resolved));
-        for (const n of d.notes) line.append(el('span', { class: 'note' }, n));
-        decls.append(line);
-      });
-      body.append(el('div', { class: 'rule' }, head, decls));
-    }
-  }
-
-  function highlightRule(rule) {
+  function highlight(nodes, persistent) {
     clearBoxes('rule');
-    const stage = $('#stage');
-    for (const node of stage.querySelectorAll('[data-t], [data-sc]')) {
-      try { if (node.matches(rule.css)) box(node, 'rule'); } catch (e) { /* ignore */ }
-    }
-    setTimeout(() => clearBoxes('rule'), 2500);
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Variables and problems tabs                                         */
-
-  function renderVariables() {
-    const body = $('#tab-vars');
-    const filter = ($('#var-filter') && $('#var-filter').value || '').toLowerCase();
-    body.querySelectorAll('.var-row').forEach(n => n.remove());
-    if (!state.compiled) return;
-    const rows = [];
-    for (const [name, r] of state.compiled.replacements) {
-      if (filter && !name.toLowerCase().includes(filter) && !(r.text || '').toLowerCase().includes(filter)) continue;
-      const src = r.source;
-      const val = el('span', { class: 'val' });
-      if (/^#[0-9a-f]{6}$/i.test(r.text || '')) val.append(el('span', { class: 'swatch', style: `background:${r.text}` }));
-      val.append(r.text == null ? '(unresolved)' : r.text);
-      rows.push(el('div', { class: 'var-row' }, el('span', { class: 'name' }, '--' + name), val,
-        el('span', { class: 'src' }, src.file === 'OBS' ? 'set by OBS (Settings › Appearance)' : `${src.file}:${src.line}`)));
-    }
-    body.append(...rows);
-  }
-
-  function renderProblems() {
-    const list = [];
-    for (const p of state.themeSet.problems) list.push({ ...p, level: 'warn' });
-    if (state.compiled) for (const w of state.compiled.warnings) list.push({ ...w, level: 'warn' });
-    if (state.css) {
-      const seen = new Set();
-      for (const r of state.css.rules) for (const d of r.decls) for (const n of d.notes) {
-        const key = `${r.file}:${d.line}:${n}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        list.push({ file: r.file, line: d.line, msg: n, level: 'warn' });
-      }
-    }
-    showProblems(list);
-  }
-
-  function showProblems(list) {
-    const body = $('#tab-problems');
-    body.textContent = '';
-    if (state.compiled) {
-      body.append(el('div', { class: 'chain' }, 'Files applied, in order: ' + state.compiled.chain.map(t => t.file.path).join(' → ')));
-    }
-    if (!list.length) body.append(el('p', { class: 'hint' }, 'No problem found.'));
-    for (const p of list) {
-      body.append(el('div', { class: 'problem ' + (p.level || 'warn') },
-        el('div', { class: 'where' }, p.file ? `${p.file}${p.line ? ':' + p.line : ''}` : ''),
-        el('div', { class: 'msg' }, p.msg)));
-    }
-    $('#problem-count').textContent = list.length ? ` (${list.length})` : '';
+    for (const node of nodes) box(node, 'rule');
+    if (!persistent) setTimeout(() => clearBoxes('rule'), 2500);
   }
 
   /* ------------------------------------------------------------------ */
@@ -484,17 +444,19 @@
    */
   async function addFiles(entries) {
     const wanted = entries.filter(e => /\.(obt|ovt|oha|svg|png)$/i.test(e.path));
-    const roots = new Set(wanted.map(e => e.path.split('/')[0]));
     const rootHoldsThemes = root => wanted.some(e => e.path.split('/').length === 2 && e.path.startsWith(root + '/') &&
                                                    /\.(obt|ovt|oha)$/i.test(e.path));
     for (const e of wanted) {
       let path = e.path;
       const root = path.split('/')[0];
-      if (path.includes('/') && roots.has(root) && rootHoldsThemes(root)) path = path.slice(root.length + 1);
-      state.userFiles.set(path, { path, content: await readFile(e.file), origin: 'user' });
+      if (path.includes('/') && rootHoldsThemes(root)) path = path.slice(root.length + 1);
+      const content = await readFile(e.file);
+      const previous = state.userFiles.get(path);
+      // Edits made against an older version of this file would no longer line up.
+      if (previous && previous.content !== content) dropEditsFor(path);
+      state.userFiles.set(path, { path, content, origin: 'user' });
     }
     rebuildThemeSet();
-    // Show the first theme the user brought in.
     // Show one of the user's themes: the most derived one (e.g. "LJCS Classic" over "LJCS").
     const mine = [...state.themeSet.themes.values()].filter(t => t.file.origin === 'user' && t.isVisible && !t.isHighContrast);
     if (mine.length && !mine.some(t => t.id === state.settings.themeId)) {
@@ -541,6 +503,9 @@
       e.target.value = '';
     });
     $('#clear-files').addEventListener('click', () => {
+      if (Object.values(state.editsByTheme).some(ed => ed.target && ed.target.kind === 'user' && editCount(ed)) &&
+          !confirm('Your pending changes to these files will be lost. Remove your files anyway?')) return;
+      for (const path of state.userFiles.keys()) dropEditsFor(path);
       state.userFiles.clear();
       rebuildThemeSet();
       updateUserFilesLabel();
@@ -556,8 +521,7 @@
       depth = 0;
       document.body.classList.remove('dragging');
       const out = [];
-      const items = [...(e.dataTransfer.items || [])];
-      const entries = items.map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+      const entries = [...(e.dataTransfer.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
       if (entries.length) for (const entry of entries) await walkEntry(entry, '', out);
       else for (const f of e.dataTransfer.files) out.push({ path: f.name, file: f });
       addFiles(out);
@@ -587,16 +551,12 @@
     zoom.value = String(s.zoom);
     const setZoom = () => { $('#stage').style.setProperty('--stage-zoom', s.zoom); };
     setZoom();
-    zoom.addEventListener('change', () => { s.zoom = +zoom.value; setZoom(); saveStored(); });
+    zoom.addEventListener('change', () => { s.zoom = +zoom.value; setZoom(); saveStored(); select(state.selected); });
     $('#theme').addEventListener('change', e => { s.themeId = e.target.value; applyTheme(); });
 
     for (const btn of document.querySelectorAll('.tabs button')) {
-      btn.addEventListener('click', () => {
-        for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b === btn);
-        for (const t of document.querySelectorAll('.tab-body')) t.hidden = t.id !== btn.dataset.tab;
-      });
+      btn.addEventListener('click', () => app.showTab(btn.dataset.tab));
     }
-    $('#var-filter').addEventListener('input', renderVariables);
 
     // Resizable panel.
     const splitter = $('.splitter');
@@ -614,7 +574,7 @@
     const stage = $('#stage');
     const win = M.build();
     stage.appendChild(win);
-    M.wire(win, () => { scheduleIcons(); renderInspector(); });
+    M.wire(win, () => { scheduleIcons(); app.renderInspector(); });
 
     stage.addEventListener('mouseover', e => {
       scheduleIcons();
@@ -638,6 +598,34 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Shared helpers                                                      */
+
+  function el(tag, attrs = {}, ...children) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === 'class') e.className = v;
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v === true ? '' : v);
+    }
+    for (const c of children) if (c != null && c !== false) e.append(c);
+    return e;
+  }
+
+  function showTab(id) {
+    for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.tab === id);
+    for (const t of document.querySelectorAll('.tab-body')) t.hidden = t.id !== id;
+  }
+
+  const app = {
+    state, $, el, E, Q, M, ED,
+    applyTheme, edits, editCount, identifyRule, currentTheme, resolveUrl, saveStored,
+    select, box, clearBoxes, describe, ownerWidget, rulesTargets, highlight, scheduleIcons, showTab,
+    // Filled in by inspector.js and changes.js.
+    renderInspector() {}, renderVariables() {}, renderChanges() {}, renderProblems() {}, showProblems() {},
+    renderAll() { app.renderInspector(); app.renderVariables(); app.renderChanges(); app.renderProblems(); },
+  };
+  window.OTI.app = app;
 
   function start() {
     loadStored();
