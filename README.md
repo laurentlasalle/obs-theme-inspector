@@ -4,6 +4,8 @@ See how an OBS Studio theme (`.obt`, `.ovt`, `.oha`) styles the OBS interface, i
 
 OBS draws its interface with Qt, whose style sheets look like CSS but run outside the browser. Finding the right selector for a widget usually means guessing from OBS's source code. This tool rebuilds the OBS main window as HTML, applies your theme to it, and shows the rules that reach any element you hover, in the order Qt applies them.
 
+> **Work in progress.** The tool is usable but incomplete: only the Scenes dock of the main window is drawn so far, and the rest (Sources, Audio Mixer, Controls, Transitions, preview, status bar and menu bar) will follow. Expect rough edges, and changes to how things work from one update to the next.
+
 ## Use it
 
 1. Download or clone this repository.
