@@ -194,11 +194,7 @@
     }
     const head = el('div', { class: 'rules-head' }, el('h2', {}, `Changes (${items.length})`));
     if (items.length) {
-      head.append(el('button', { type: 'button', class: 'mini danger', onclick: () => {
-        if (!confirm('Revert every change made to this theme?')) return;
-        Object.assign(ed, { decls: [], added: [], rules: [], vars: [] });
-        app.applyTheme();
-      } }, 'Revert all'));
+      head.append(el('button', { type: 'button', class: 'mini danger', onclick: () => app.revertAll() }, 'Revert all'));
     }
     body.append(head);
     if (!items.length) {

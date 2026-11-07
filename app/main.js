@@ -34,6 +34,7 @@
     editsByTheme: {},           // theme id -> edits (see editor.js)
     registered: new Set(),
     urlCache: new Map(),
+    restored: {},
   };
 
   /* ------------------------------------------------------------------ */
@@ -47,6 +48,42 @@
       for (const f of files) state.userFiles.set(f.path, f);
       state.editsByTheme = JSON.parse(localStorage.getItem(EDITS_KEY) || '{}');
     } catch (e) { /* storage unavailable: start fresh */ }
+    // Remember what was restored, to say so until the first new change.
+    state.restored = {};
+    for (const [id, ed] of Object.entries(state.editsByTheme)) {
+      if (editCount(ed)) state.restored[id] = editsSnapshot(ed);
+    }
+  }
+
+  function editsSnapshot(ed) {
+    return JSON.stringify([ed.decls, ed.added, ed.rules, ed.vars]);
+  }
+
+  /** Banner shown while the current theme still holds the changes restored from the last session. */
+  function updateRestoreNotice() {
+    const notice = $('#restore-notice');
+    const id = state.settings.themeId;
+    const ed = state.editsByTheme[id];
+    if (state.restored[id] && (!ed || editsSnapshot(ed) !== state.restored[id])) delete state.restored[id];
+    if (!state.restored[id]) { notice.hidden = true; notice.textContent = ''; return; }
+    const n = editCount(ed);
+    notice.textContent = '';
+    notice.append(
+      el('span', {}, `${n} change${n === 1 ? '' : 's'} restored from your last session.`),
+      el('span', { class: 'actions' },
+        el('button', { type: 'button', class: 'mini danger', onclick: () => revertAll() }, 'Revert all'),
+        el('button', { type: 'button', class: 'mini', onclick: () => {
+          delete state.restored[id];
+          updateRestoreNotice();
+        } }, 'Dismiss')));
+    notice.hidden = false;
+  }
+
+  /** Drops every change made to the current theme, after confirmation. */
+  function revertAll() {
+    if (!confirm('Revert every change made to this theme?')) return;
+    Object.assign(edits(), { decls: [], added: [], rules: [], vars: [] });
+    applyTheme();
   }
 
   function saveStored() {
@@ -290,6 +327,7 @@
     $('#density-label').classList.toggle('disabled', !compiled.usesDensity);
     const n = editCount();
     $('#change-count').textContent = n ? ` (${n})` : '';
+    updateRestoreNotice();
 
     requestAnimationFrame(() => {
       applyIcons();
@@ -619,7 +657,7 @@
 
   const app = {
     state, $, el, E, Q, M, ED,
-    applyTheme, edits, editCount, identifyRule, currentTheme, resolveUrl, saveStored,
+    applyTheme, revertAll, edits, editCount, identifyRule, currentTheme, resolveUrl, saveStored,
     select, box, clearBoxes, describe, ownerWidget, rulesTargets, highlight, scheduleIcons, showTab,
     // Filled in by inspector.js and changes.js.
     renderInspector() {}, renderVariables() {}, renderChanges() {}, renderProblems() {}, showProblems() {},

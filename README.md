@@ -37,6 +37,8 @@ Click a value in the **Element** or **Variables** tab to change it. The mock-up 
 
 Your files are never modified, and nothing leaves the page until you ask for it in the **Changes** tab.
 
+The browser keeps your loaded files, settings and changes, so reloading the page loses nothing. A banner then says how many changes were restored, with a **Revert all** button to start again from the original theme. Each browser keeps its own copy. If you load a new version of a file, the changes made to the old one are dropped, since they point at lines that may have moved.
+
 ### Where changes go
 
 - **Rules of your own file** are changed where they are.

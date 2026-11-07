@@ -157,6 +157,8 @@
     const body = $('#tab-element');
     // Keep a value being typed in: re-rendering would steal the focus.
     if (state.typing) return;
+    const anchor = measureAnchor(body);
+    const focusing = !!state.focusDecl;
     body.textContent = '';
     const target = state.selected;
     if (!target || !document.contains(target)) {
@@ -204,7 +206,57 @@
     body.append(el('h2', {}, 'Force states'), states);
 
     renderRules(body, target, widget);
+    if (!focusing) restoreAnchor(body, anchor);
   }
+
+  /* ------------------------------------------------------------------ */
+  /* Scroll anchoring                                                    */
+  /* Re-rendering rebuilds the panel, and what lies above the element the */
+  /* user just touched may change height: keep that element in place.    */
+
+  function anchorSelectors(node) {
+    const out = [];
+    const section = node.closest('[data-section]');
+    const sec = section ? `[data-section="${section.dataset.section}"] ` : '';
+    const rule = node.closest('.rule[data-ref]');
+    const ref = rule ? `.rule[data-ref="${CSS.escape(rule.dataset.ref)}"]` : '';
+    const decl = node.closest('.decl[data-prop], .c-row[data-prop]');
+    if (decl) out.push(`${sec}${ref ? ref + ' ' : ''}.${decl.classList[0]}[data-prop="${CSS.escape(decl.dataset.prop)}"]`);
+    if (ref) out.push(sec + ref);
+    if (section) out.push(sec.trim());
+    return out;
+  }
+
+  function rememberAnchor(ev) {
+    const sels = anchorSelectors(ev.target);
+    if (sels.length) state.anchor = { target: state.selected, sels };
+  }
+
+  function measureAnchor(body) {
+    const a = state.anchor;
+    if (!a || a.target !== state.selected || body.hidden) return null;
+    const top = body.getBoundingClientRect().top;
+    const found = a.sels.map(sel => body.querySelector(sel)).map(n => n ? n.getBoundingClientRect().top - top : null);
+    return { sels: a.sels, offsets: found };
+  }
+
+  function restoreAnchor(body, m) {
+    if (!m) return;
+    const top = body.getBoundingClientRect().top;
+    for (let i = 0; i < m.sels.length; i++) {
+      if (m.offsets[i] === null) continue;
+      const n = body.querySelector(m.sels[i]);
+      if (!n) continue;
+      body.scrollTop += (n.getBoundingClientRect().top - top) - m.offsets[i];
+      return;
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const body = $('#tab-element');
+    body.addEventListener('pointerdown', rememberAnchor, true);
+    body.addEventListener('focusin', rememberAnchor, true);
+  });
 
   function suggestSelector(target, widget, withoutStates) {
     let sel = widget.dataset.type;
@@ -260,9 +312,11 @@
     }
 
     const winner = winners(rules);
+    const own = el('div', { 'data-section': 'rules' });
     for (let ri = rules.length - 1; ri >= 0; ri--) {
-      body.append(renderRule(rules[ri], ri, winner));
+      own.append(renderRule(rules[ri], ri, winner));
     }
+    body.append(own);
 
     // A sub-control is drawn with the font and colour of its widget.
     let inherited = null;
@@ -278,9 +332,11 @@
         if (card) cards.push(card);
       }
       inherited = { widget, rules: ownerRules };
-      body.append(el('h2', {}, `Inherited from ${app.describe(widget)}`));
-      if (cards.length) body.append(...cards);
-      else body.append(el('p', { class: 'hint' }, 'No rule sets its font or colour: Qt uses the application font and palette.'));
+      const section = el('div', { class: 'section inherited-section', 'data-section': 'inherited' },
+        el('h2', {}, `Inherited from ${app.describe(widget)}`));
+      if (cards.length) section.append(...cards);
+      else section.append(el('p', { class: 'hint' }, 'No rule sets its font or colour: Qt uses the application font and palette.'));
+      body.append(section);
     }
 
     renderComputed(body, target, widget, rules, inherited);
@@ -430,12 +486,12 @@
       const valSpan = el('span', { class: 'c-val editable', title: 'Click to set this property in a rule' }, shown || '—');
       valSpan.addEventListener('click', () => chooseDestination(row, target, widget, rules, c, declared || value));
       const srcEl = ref ? el('a', { class: 'c-src', onclick: () => jumpTo(ref) }, src) : el('span', { class: 'c-src' }, src);
-      const row = el('div', { class: 'c-row' + (fromTheme ? '' : ' default') },
+      const row = el('div', { class: 'c-row' + (fromTheme ? '' : ' default'), 'data-prop': c.prop },
         el('span', { class: 'c-prop' }, c.prop), valSpan, srcEl);
       if (declared && declared !== value) valSpan.title = `Declared as ${declared}. Click to set this property in a rule.`;
       table.append(row);
     }
-    body.append(el('h2', {}, 'Computed'), table);
+    body.append(el('div', { class: 'section computed-section', 'data-section': 'computed' }, el('h2', {}, 'Computed'), table));
   }
 
   /**
@@ -632,7 +688,8 @@
     const r = resolved(v.value);
     if (r !== v.value) line.append(' ', el('span', { class: 'r' }, '→ ' + r));
     if (v.changedElsewhere) line.append(' ', el('span', { class: 'badge' }, 'changed in your file'));
-    if (v.revert) line.append(' ', el('button', { type: 'button', class: 'revert', title: v.added ? 'Remove' : 'Revert',
+    if (v.revert) line.append(' ', el('button', { type: 'button', class: 'revert',
+                                                  title: v.added ? 'Remove' : v.disabled ? 'Revert (same as ticking the box)' : 'Revert',
                                                   onclick: v.revert }, v.added ? '✕' : '↺'));
     for (const n of v.notes || []) line.append(el('span', { class: 'note' }, n));
     return line;
