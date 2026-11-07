@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OBS Theme Inspector</title>
+<link rel="stylesheet" href="app/native.css">
+<link rel="stylesheet" href="app/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>OBS Theme Inspector</h1>
+  <label>Theme
+    <select id="theme" title="Base themes and their variants. ★ marks your own files."></select>
+  </label>
+  <label id="font-scale-label" title="Settings › Appearance › Font Size">Font Size
+    <input id="font-scale" type="range" min="8" max="12" step="1">
+    <span id="font-scale-value" class="value"></span>
+  </label>
+  <label id="density-label" title="Settings › Appearance › Density">Density
+    <select id="density">
+      <option value="0.25">Classic</option>
+      <option value="2">Compact</option>
+      <option value="4">Normal</option>
+      <option value="6">Comfortable</option>
+    </select>
+  </label>
+  <label title="Variables named --os_win_*, --os_mac_* or --os_lin_* apply to one system only">System
+    <select id="os">
+      <option value="win">Windows</option>
+      <option value="mac">macOS</option>
+      <option value="lin">Linux</option>
+    </select>
+  </label>
+  <label title="Display scale, to compare with screenshots taken at 150 % or 200 %">Zoom
+    <select id="zoom">
+      <option value="1">100 %</option>
+      <option value="1.25">125 %</option>
+      <option value="1.5">150 %</option>
+      <option value="2">200 %</option>
+    </select>
+  </label>
+  <span class="spacer"></span>
+  <button id="add-files" type="button" title="Theme files (.obt, .ovt, .oha) and their images">Add files…</button>
+  <button id="add-folder" type="button" title="A themes folder, with its sub-folders of images">Add folder…</button>
+  <button id="clear-files" type="button" hidden>Remove my files</button>
+  <span id="user-files" class="user-files"></span>
+  <input id="file-input" type="file" multiple accept=".obt,.ovt,.oha,.svg,.png" hidden>
+  <input id="folder-input" type="file" webkitdirectory hidden>
+</header>
+
+<main>
+  <div id="stage-wrap">
+    <div id="stage"></div>
+  </div>
+  <div class="splitter" title="Drag to resize"></div>
+  <aside class="panel">
+    <nav class="tabs">
+      <button type="button" class="active" data-tab="tab-element">Element</button>
+      <button type="button" data-tab="tab-vars">Variables</button>
+      <button type="button" data-tab="tab-problems">Problems<span id="problem-count" class="count"></span></button>
+    </nav>
+    <section id="tab-element" class="tab-body"></section>
+    <section id="tab-vars" class="tab-body" hidden>
+      <input id="var-filter" type="search" placeholder="Filter variables" style="width:100%;margin-bottom:8px">
+    </section>
+    <section id="tab-problems" class="tab-body" hidden></section>
+  </aside>
+</main>
+
+<div class="dropzone">Drop theme files or a themes folder</div>
+<div id="theme-styles"></div>
+
+<script src="app/bundle-obs-32.2.1.js"></script>
+<script src="app/theme-engine.js"></script>
+<script src="app/qss-to-css.js"></script>
+<script src="app/mock.js"></script>
+<script src="app/main.js"></script>
+</body>
+</html>
