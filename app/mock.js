@@ -184,7 +184,7 @@
     const states = opts.states ? [...opts.states] : [];
     if (opts.checkable) states.push('checkable', opts.checked ? 'checked' : 'unchecked');
     const children = [];
-    if (opts.menu) children.push(sc('menu-indicator', { image: true }));
+    if (opts.menu) children.push(sc('menu-indicator'));
     return w('QPushButton', Object.assign({}, opts, { states, focusable: true }), children);
   }
 
@@ -562,6 +562,7 @@
     return on;
   }
 
+  /** Makes the mock-up respond to clicks; onChange(element) is called after each change. */
   function wire(root, onChange) {
     root.addEventListener('scroll', () => syncScrollBars(root), true);
     root.addEventListener('click', e => {
@@ -580,7 +581,7 @@
           vc.dataset.monitoring = type !== MONITOR_NONE ? MONITOR_NONE : MONITOR_AND_OUTPUT;
         }
         processMixerState(vc);
-        onChange();
+        onChange(vc);
         return;
       }
 
@@ -594,7 +595,7 @@
             if (on) removeState(sib, 'disabled'); else addState(sib, 'disabled');
           }
         }
-        onChange();
+        onChange(checkbox);
         return;
       }
       if (item && root.contains(item) && !item.closest('[data-t~="QMenuBar"]')) {
@@ -604,13 +605,13 @@
         }
         addState(item, 'selected');
         addState(item, 'focus');
-        onChange();
+        onChange(item);
         return;
       }
       const button = e.target.closest('[data-s~="checkable"]');
       if (button && root.contains(button)) {
         toggleChecked(button);
-        onChange();
+        onChange(button);
       }
     });
   }

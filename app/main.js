@@ -19,6 +19,7 @@
   const STORAGE_KEY = 'oti.userFiles.v1';
   const SETTINGS_KEY = 'oti.settings.v1';
   const EDITS_KEY = 'oti.edits.v1';
+  const DEFAULT_THEME = 'com.obsproject.Yami';
 
   const state = {
     bundle: window.OTI.bundles[0],
@@ -29,12 +30,13 @@
     gen: null,                  // edited target file and how its lines map to the original
     selected: null,             // element shown in the inspector
     locked: false,
-    settings: { themeId: 'com.obsproject.Yami.Classic', fontScale: 10, density: 4, os: 'win', zoom: 1,
+    settings: { themeId: DEFAULT_THEME, fontScale: 10, density: 4, os: 'win', zoom: 1,
                 highContrast: false, author: '', panelWidth: null },
     editsByTheme: {},           // theme id -> edits (see editor.js)
-    registered: new Set(),
-    urlCache: new Map(),
-    restored: {},
+    registered: new Set(),      // custom properties registered with CSS.registerProperty
+    urlCache: new Map(),        // theme URL -> data URL
+    restored: {},               // theme id -> edits restored from the last session (see updateRestoreNotice)
+    dirtyTabs: new Set(),       // hidden tabs to render when shown
   };
 
   /* ------------------------------------------------------------------ */
@@ -179,7 +181,7 @@
       }
       select.appendChild(group);
     }
-    if (!state.themeSet.themes.has(state.settings.themeId)) state.settings.themeId = 'com.obsproject.Yami.Classic';
+    if (!state.themeSet.themes.has(state.settings.themeId)) state.settings.themeId = DEFAULT_THEME;
     select.value = state.settings.themeId;
   }
 
@@ -222,26 +224,19 @@
     const originalText = target.kind === 'user' ? theme.file.text : ED.newVariantText(target);
     const targetVars = new Map(target.kind === 'user'
       ? E.parseVars(originalText, state.settings.os, [], path).map(v => [v.name, v]) : []);
+    // The target's own rules, as written in the original file.
+    const ownRules = new Map(Q.parseSheet(originalText).map(r => [ED.ruleKey(path, r.line, r.selectorText), r]));
     const ruleInfo = key => {
       const [file, line, ...rest] = key.split('|');
       return { file, line: +line, ruleText: rest.join('|') };
     };
-    const has = editCount(ed) > 0;
-    const out = has
-      ? ED.generate(ed, { originalText, targetPath: path, ruleInfo, targetVars })
+    const hasEdits = editCount(ed) > 0;
+    const out = hasEdits
+      ? ED.generate(ed, { originalText, ownRules, ruleInfo, targetVars })
       : { text: originalText, appended: [], appendBlock: '', varLines: [] };
     const diff = ED.diffLines(originalText, out.text);
-
-    // The target's own rules, as written in the original file.
-    const ownRules = new Map();
-    const clean = E.stripComments(originalText);
-    const offset = E.endOfObsMetadata(originalText);
-    const lineOffset = clean.slice(0, offset).split('\n').length;
-    for (const r of Q.parseRules(clean.slice(offset), lineOffset, offset)) {
-      ownRules.set(ED.ruleKey(path, r.line, r.selectorText), r);
-    }
     return Object.assign(out, { target, path, originalText, diff, lineMap: ED.lineMap(diff), ownRules,
-                                hasEdits: has, ruleInfo, targetVars });
+                                hasEdits, ruleInfo, targetVars });
   }
 
   /**
@@ -331,9 +326,8 @@
     $('#change-count').textContent = n ? ` (${n})` : '';
     updateRestoreNotice();
 
+    refreshStage();
     requestAnimationFrame(() => {
-      applyIcons();
-      M.paintAll($('#stage'));
       if (state.selected) select(state.selected);
       if (!live) app.renderAll();
     });
@@ -353,13 +347,20 @@
     return isFinite(n) && n > 0 ? n : fallback;
   }
 
-  function applyIcons() {
-    const stage = $('#stage');
+  /** `root` and the elements under it that match `selector`. */
+  function within(root, selector) {
+    const out = [...root.querySelectorAll(selector)];
+    if (root.matches(selector)) out.unshift(root);
+    return out;
+  }
+
+  /** Applies icons and images under `root` from the computed style of each element. */
+  function applyIcons(root) {
     // Source icons are properties of the main window (qproperty-gameCapIcon …).
-    const mainWindow = stage.querySelector('[data-t~="QMainWindow"]');
+    const mainWindow = $('#stage [data-t~="QMainWindow"]');
     const windowStyle = mainWindow ? getComputedStyle(mainWindow) : null;
-    const dark = !!(state.compiled && state.compiled.theme && state.compiled.theme.dark);
-    for (const node of stage.querySelectorAll('[data-icon-default], [data-icon-qp]')) {
+    const dark = !!(state.compiled && state.compiled.theme.dark);
+    for (const node of within(root, '[data-icon-default], [data-icon-qp]')) {
       const cs = getComputedStyle(node);
       const url = cssUrl(cs.getPropertyValue('--qp-icon')) || cssUrl(cs.getPropertyValue('--q-icon')) ||
                   (node.dataset.iconQp && windowStyle &&
@@ -369,28 +370,23 @@
       const size = sizeOf(cs.getPropertyValue('--q-icon-size'), +node.dataset.iconSize);
       setIcon(node.querySelector(':scope > .q-icon'), url, size);
     }
-    for (const node of stage.querySelectorAll('[data-icon-from]')) {
+    for (const node of within(root, '[data-icon-from]')) {
       // Dock title buttons take their icon from the dock (titlebar-*-icon).
-      const owner = node.parentElement;
-      const url = cssUrl(getComputedStyle(owner).getPropertyValue('--q-' + node.dataset.iconFrom));
+      const url = cssUrl(getComputedStyle(node.parentElement).getPropertyValue('--q-' + node.dataset.iconFrom));
       const size = sizeOf(getComputedStyle(node).getPropertyValue('--q-icon-size'), +node.dataset.iconSize);
       setIcon(node.querySelector(':scope > .q-icon'), url || resolveUrl(':/res/images/' +
         (node.dataset.iconFrom.includes('close') ? 'close.svg' : 'popout.svg')), size);
     }
-    for (const node of stage.querySelectorAll('[data-sc], [data-t]')) {
+    // image: draws a picture over the element (indicators, arrows …).
+    for (const node of within(root, '[data-sc], [data-t]')) {
       const url = cssUrl(getComputedStyle(node).getPropertyValue('--q-image'));
       let img = node.querySelector(':scope > .q-image');
       if (!url && !img) continue;
       if (!img) { img = document.createElement('span'); img.className = 'q-image'; node.prepend(img); }
       node.classList.toggle('has-image', !!url);
-      if (url) {
-        img.textContent = ' ';
-        img.style.backgroundImage = `url("${url}")`;
-        img.style.width = img.style.height = '100%';
-      } else {
-        img.textContent = '';
-        img.style.backgroundImage = '';
-      }
+      img.textContent = url ? ' ' : '';
+      img.style.backgroundImage = url ? `url("${url}")` : '';
+      img.style.width = img.style.height = url ? '100%' : '';
     }
   }
 
@@ -400,10 +396,32 @@
     span.style.width = span.style.height = size + 'px';
   }
 
-  let iconFrame = 0;
-  function scheduleIcons() {
-    cancelAnimationFrame(iconFrame);
-    iconFrame = requestAnimationFrame(() => { applyIcons(); M.paintAll($('#stage')); });
+  /**
+   * Icons, painted widgets (meters, sliders, scroll bars) depend on the
+   * computed style, which changes with :hover, :pressed … Refreshing them is
+   * deferred to the next frame and limited to the part of the window that
+   * changed: the top-level area (a dock, the preview …) holding `node`, or
+   * the whole stage when no node is given.
+   */
+  const pendingAreas = new Set();
+  let refreshFrame = 0;
+
+  function refreshStage(node) {
+    const stage = $('#stage');
+    const area = node && node.closest && node.closest('.mock-window > *');
+    pendingAreas.add(area && stage.contains(area) ? area : stage);
+    if (!refreshFrame) refreshFrame = requestAnimationFrame(flushRefresh);
+  }
+
+  function flushRefresh() {
+    refreshFrame = 0;
+    const stage = $('#stage');
+    const areas = pendingAreas.has(stage) ? [stage] : [...pendingAreas];
+    pendingAreas.clear();
+    for (const area of areas) {
+      applyIcons(area);
+      M.paintAll(area);
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -459,13 +477,13 @@
     if (changed || lock !== undefined) app.renderInspector();
   }
 
-  /** Highlights every element a compiled rule targets; returns how many. */
+  /** The elements of the mock-up a compiled rule targets. */
   function rulesTargets(rule) {
-    const out = [];
-    for (const node of $('#stage').querySelectorAll('[data-t], [data-sc]')) {
-      try { if (node.matches(rule.css)) out.push(node); } catch (e) { /* ignore */ }
+    try {
+      return [...$('#stage').querySelectorAll(rule.css)];
+    } catch (e) {
+      return []; // a selector the browser rejects
     }
-    return out;
   }
 
   function highlight(nodes, persistent) {
@@ -633,18 +651,20 @@
     const stage = $('#stage');
     const win = M.build();
     stage.appendChild(win);
-    M.wire(win, () => { scheduleIcons(); app.renderInspector(); });
-    new ResizeObserver(() => scheduleIcons()).observe(win);
+    M.wire(win, node => { refreshStage(node); app.renderInspector(); });
+    new ResizeObserver(() => refreshStage()).observe(win);
 
+    // Hover and press change styles: refresh the area left and the area entered.
     stage.addEventListener('mouseover', e => {
-      scheduleIcons();
+      refreshStage(e.target);
+      if (e.relatedTarget) refreshStage(e.relatedTarget);
       if (state.locked) return;
       const t = inspectable(e.target);
       if (t && t !== state.selected) select(t);
     });
-    stage.addEventListener('mouseout', scheduleIcons);
-    stage.addEventListener('mousedown', scheduleIcons);
-    stage.addEventListener('mouseup', scheduleIcons);
+    stage.addEventListener('mouseout', e => { if (!stage.contains(e.relatedTarget)) refreshStage(e.target); });
+    stage.addEventListener('mousedown', e => refreshStage(e.target));
+    stage.addEventListener('mouseup', e => refreshStage(e.target));
     stage.addEventListener('click', e => {
       if (!(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
@@ -675,15 +695,31 @@
   function showTab(id) {
     for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.tab === id);
     for (const t of document.querySelectorAll('.tab-body')) t.hidden = t.id !== id;
+    if (state.dirtyTabs.delete(id)) TAB_RENDERERS[id]();
+  }
+
+  // The Variables and Changes tabs are long to build: a hidden one is only
+  // marked, and built when it is shown.
+  const TAB_RENDERERS = {
+    'tab-vars': () => app.renderVariables(),
+    'tab-changes': () => app.renderChanges(),
+  };
+
+  function renderAll() {
+    app.renderInspector();
+    for (const [id, render] of Object.entries(TAB_RENDERERS)) {
+      if ($('#' + id).hidden) state.dirtyTabs.add(id); else render();
+    }
+    app.renderProblems();
   }
 
   const app = {
     state, $, el, E, Q, M, ED,
     applyTheme, revertAll, edits, editCount, identifyRule, currentTheme, resolveUrl, saveStored,
-    select, box, clearBoxes, describe, ownerWidget, rulesTargets, highlight, scheduleIcons, showTab,
+    select, box, clearBoxes, describe, ownerWidget, rulesTargets, highlight, refreshStage, showTab,
     // Filled in by inspector.js and changes.js.
     renderInspector() {}, renderVariables() {}, renderChanges() {}, renderProblems() {}, showProblems() {},
-    renderAll() { app.renderInspector(); app.renderVariables(); app.renderChanges(); app.renderProblems(); },
+    renderAll,
   };
   window.OTI.app = app;
 

@@ -44,6 +44,23 @@
     return tokens;
   }
 
+  /**
+   * Returns a function giving the 1-based line number of an offset in `text`.
+   * Built once per file, so finding many lines stays fast on large themes.
+   */
+  function lineIndex(text) {
+    const starts = [0];
+    for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+    return pos => {
+      let lo = 0, hi = starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (starts[mid] <= pos) lo = mid; else hi = mid - 1;
+      }
+      return lo + 1;
+    };
+  }
+
   function unquote(tok) {
     if (/^(["']).*\1$/s.test(tok)) return tok.slice(1, -1).replace(/\\(.)/g, '$1');
     return tok;
@@ -189,7 +206,7 @@
     const block = findBlock(clean, 'OBSThemeVars');
     if (!block) return vars;
     const osPrefix = 'os_' + os + '_';
-    const lineOf = idx => clean.slice(0, idx).split('\n').length;
+    const lineOf = lineIndex(clean);
 
     let pos = block.start;
     for (const raw of block.body.split(';')) {
@@ -204,14 +221,15 @@
       if (key.startsWith(osPrefix) && key.length > osPrefix.length) name = key.slice(osPrefix.length);
 
       const tokens = tokenize(m[2]);
-      const line = lineOf(declStart + raw.search(/\S/));
       // Positions in the original text, used to write edited values back.
+      const first = declStart + raw.search(/\S/);
       const colon = raw.indexOf(':');
       const afterColon = raw.slice(colon + 1);
       const valueStart = declStart + colon + 1 + (afterColon.length - afterColon.trimStart().length);
       const valueEnd = declStart + raw.trimEnd().length;
+      const line = lineOf(first);
       const v = { name, key, file, line, suffix: '', editable: false, text: m[2],
-                  declStart: declStart + raw.search(/\S/), valueStart, valueEnd };
+                  declStart: first, valueStart, valueEnd };
       const t0 = tokens[0];
       let next = 1;
       if (t0 === undefined) continue;
@@ -521,7 +539,7 @@
 
   window.OTI = window.OTI || {};
   window.OTI.engine = {
-    VarType, stripComments, parseMeta, parseVars, buildThemeSet, compileTheme, substitute,
-    palette, endOfObsMetadata, varsBlock, metaBlockEnd, densityValues: { Classic: 0.25, Compact: 2, Normal: 4, Comfortable: 6 },
+    VarType, stripComments, lineIndex, parseMeta, parseVars, buildThemeSet, compileTheme, substitute,
+    palette, endOfObsMetadata, varsBlock, metaBlockEnd,
   };
 })();

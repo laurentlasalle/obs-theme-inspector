@@ -12,7 +12,7 @@
   'use strict';
 
   const app = window.OTI.app;
-  const { state, el, $, M, ED, E } = app;
+  const { state, el, $, M, E } = app;
 
   const STATE_TOGGLES = ['hover', 'pressed', 'focus', 'checked', 'selected', 'disabled'];
   // States copied into a suggested selector for a new rule.
@@ -198,7 +198,7 @@
       cb.checked = M.hasState(target, s);
       cb.addEventListener('change', () => {
         cb.checked ? M.addState(target, s) : M.removeState(target, s);
-        app.scheduleIcons();
+        app.refreshStage(target);
         renderInspector();
       });
       states.append(el('label', {}, cb, ':' + s));
@@ -696,4 +696,5 @@
   }
 
   app.renderInspector = renderInspector;
+  app.editInPlace = editInPlace;
 })();

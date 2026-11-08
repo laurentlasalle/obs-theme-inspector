@@ -23,6 +23,10 @@
   /* ------------------------------------------------------------------ */
   /* QSS parsing                                                         */
 
+  /**
+   * Splits `text` on `sep`, ignoring separators inside quotes, parentheses
+   * and brackets. Returns [{ text, start }] (start: offset of the part).
+   */
   function splitTopLevel(text, sep) {
     const parts = [];
     let depth = 0, quote = null, start = 0;
@@ -39,15 +43,16 @@
   }
 
   /**
-   * Parses QSS rules. `text` must already have its comments blanked out.
-   * Returns [{ selectorText, selectors: [string], line, decls: [{ prop, value, line }] }].
+   * Parses the QSS rules of `text` (comments already blanked out) from `from`
+   * on. Offsets are positions in `text`, so they can be used to edit the
+   * original file in place.
+   * Returns [{ selectorText, selectors, line, start, open, close,
+   *            decls: [{ prop, value, line, start, valueStart, valueEnd, end, hasSemicolon }] }].
    */
-  function parseRules(text, lineOffset, baseOffset = 0) {
+  function parseRules(text, from = 0) {
     const rules = [];
-    let i = 0;
-    const lineAt = idx => lineOffset + text.slice(0, idx).split('\n').length - 1;
-    // Absolute offsets in the original file, used to write edits back.
-    const abs = idx => baseOffset + idx;
+    const lineAt = window.OTI.engine.lineIndex(text);
+    let i = from;
     while (i < text.length) {
       const open = text.indexOf('{', i);
       if (open < 0) break;
@@ -56,23 +61,25 @@
       const rawSel = text.slice(i, open);
       const selStart = i + rawSel.search(/\S|$/);
       const selectorText = rawSel.trim().replace(/\s+/g, ' ');
-      const body = text.slice(open + 1, close);
       const decls = [];
-      for (const part of splitTopLevel(body, ';')) {
-        const idx = part.text.indexOf(':');
-        if (idx < 0) continue;
-        const prop = part.text.slice(0, idx).trim();
-        const value = part.text.slice(idx + 1).trim();
+      for (const part of splitTopLevel(text.slice(open + 1, close), ';')) {
+        const colon = part.text.indexOf(':');
+        const prop = colon < 0 ? '' : part.text.slice(0, colon).trim();
         if (!prop) continue;
         const partStart = open + 1 + part.start;
-        const declPos = partStart + part.text.search(/\S/);
-        const rawValue = part.text.slice(idx + 1);
-        const valueStart = partStart + idx + 1 + (rawValue.length - rawValue.trimStart().length);
-        const valueEnd = partStart + part.text.trimEnd().length;
+        const start = partStart + part.text.search(/\S/);
+        const rawValue = part.text.slice(colon + 1);
         const end = partStart + part.text.length; // the ";" (or the "}")
-        decls.push({ prop, value, line: lineAt(declPos),
-                     start: abs(declPos), valueStart: abs(valueStart), valueEnd: abs(valueEnd), end: abs(end),
-                     hasSemicolon: text[end] === ';' });
+        decls.push({
+          prop,
+          value: rawValue.trim(),
+          line: lineAt(start),
+          start,
+          valueStart: partStart + colon + 1 + (rawValue.length - rawValue.trimStart().length),
+          valueEnd: partStart + part.text.trimEnd().length,
+          end,
+          hasSemicolon: text[end] === ';',
+        });
       }
       if (selectorText && !selectorText.startsWith('@')) {
         rules.push({
@@ -80,14 +87,20 @@
           selectors: splitTopLevel(selectorText, ',').map(p => p.text.trim()).filter(Boolean),
           line: lineAt(selStart),
           decls,
-          start: abs(selStart),
-          open: abs(open),
-          close: abs(close),
+          start: selStart,
+          open,
+          close,
         });
       }
       i = close + 1;
     }
     return rules;
+  }
+
+  /** The rules of a theme file: its style sheet follows the @OBSTheme… blocks. */
+  function parseSheet(fileText) {
+    const E = window.OTI.engine;
+    return parseRules(E.stripComments(fileText), E.endOfObsMetadata(fileText));
   }
 
   /* ------------------------------------------------------------------ */
@@ -324,12 +337,8 @@
     const sheets = [];
 
     compiled.sources.forEach((src, fileIndex) => {
-      const clean = E.stripComments(src.text);
-      const body = clean.slice(src.offset);
-      const lineOffset = clean.slice(0, src.offset).split('\n').length;
-      const rules = parseRules(body, lineOffset, src.offset);
       const out = [];
-      for (const rule of rules) {
+      for (const rule of parseRules(E.stripComments(src.text), src.offset)) {
         const decls = rule.decls.map(d => {
           const notes = [];
           const missing = [];
@@ -365,5 +374,5 @@
   }
 
   window.OTI = window.OTI || {};
-  window.OTI.qss = { parseRules, translateSelector, translateDecl, compileCss, specificity, tokenizeSelector };
+  window.OTI.qss = { splitTopLevel, parseRules, parseSheet, translateSelector, translateDecl, compileCss };
 })();

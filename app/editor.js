@@ -36,7 +36,8 @@
   /* Target file                                                         */
 
   function slug(text) {
-    return text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    // Accents removed: "é" becomes "e".
+    return text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'custom';
   }
 
@@ -91,17 +92,9 @@
 
   function indentOf(text, pos) { return /^[ \t]*/.exec(text.slice(lineStart(text, pos)))[0]; }
 
+  /** One selector per line, as OBS's own themes are written. */
   function formatSelectors(ruleText) {
-    const parts = [];
-    let depth = 0, start = 0;
-    for (let i = 0; i < ruleText.length; i++) {
-      const ch = ruleText[i];
-      if (ch === '(' || ch === '[') depth++;
-      else if (ch === ')' || ch === ']') depth--;
-      else if (ch === ',' && depth === 0) { parts.push(ruleText.slice(start, i).trim()); start = i + 1; }
-    }
-    parts.push(ruleText.slice(start).trim());
-    return parts.filter(Boolean).join(',\n');
+    return Q.splitTopLevel(ruleText, ',').map(p => p.text.trim()).filter(Boolean).join(',\n');
   }
 
   function ruleBlock(comment, selectorText, decls, indent = '    ') {
@@ -117,23 +110,15 @@
   /* Generation                                                          */
 
   /**
-   * ctx: { originalText, targetPath, isTarget(file), ruleInfo(key) -> { file, line, ruleText },
-   *        targetVars: Map(name -> var parsed from the target) }
-   * Returns { text, appended: [{ line, ref }], appendBlock, varLines }.
+   * ctx: { originalText, ownRules: Map(ruleKey -> rule parsed from the target),
+   *        ruleInfo(key) -> { file, line, ruleText }, targetVars: Map(name -> var parsed from the target) }
+   * Returns { text, appended: [{ line, lines, ref }], appendBlock, varLines }
+   * (appended: where each added rule sits in `text`, and what it holds).
    */
   function generate(edits, ctx) {
     const original = ctx.originalText;
+    const targetRules = ctx.ownRules;
     const ops = []; // { start, end, text } on the original text
-
-    const targetRules = new Map();
-    {
-      const clean = E.stripComments(original);
-      const offset = E.endOfObsMetadata(original);
-      const lineOffset = clean.slice(0, offset).split('\n').length;
-      for (const r of Q.parseRules(clean.slice(offset), lineOffset, offset)) {
-        targetRules.set(ruleKey(ctx.targetPath, r.line, r.selectorText), r);
-      }
-    }
 
     // 1. Declarations of the target's own rules: edited in place.
     const overrideGroups = new Map(); // ruleKey -> { info, decls: [] }
@@ -314,13 +299,9 @@
       if (type === 'eq') continue;
       let end = start;
       while (end + 1 < ops.length && ops[end + 1].type === type) end++;
+      // [A, B, C] followed by an unchanged A becomes A, [B, C, A].
       while (end + 1 < ops.length && ops[end + 1].type === 'eq' && ops[end + 1].text === ops[start].text) {
-        const eq = ops[end + 1];
-        const first = ops[start];
-        ops.splice(end + 1, 1);
-        ops.splice(start, 1);
-        ops.splice(start, 0, eq);
-        ops.splice(end + 1, 0, first);
+        ops.splice(start, end - start + 2, ops[end + 1], ...ops.slice(start + 1, end + 1), ops[start]);
         start++;
         end++;
       }

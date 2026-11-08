@@ -12,7 +12,7 @@
   'use strict';
 
   const app = window.OTI.app;
-  const { state, el, $, ED } = app;
+  const { state, el, $ } = app;
   const CONTEXT = 3;
 
   /* ------------------------------------------------------------------ */
@@ -53,34 +53,9 @@
       const shown = edit ? edit.value : text || r.text;
       const valueSpan = el('span', { class: editable ? 'editable' : '', title: editable ? 'Click to edit' : '' }, shown);
       if (editable) {
-        valueSpan.addEventListener('click', () => {
-          const original = edit ? edit.original : text;
-          const input = el('input', { class: 'inline-edit', type: 'text', spellcheck: 'false' });
-          input.value = shown;
-          input.style.width = Math.max(8, shown.length + 2) + 'ch';
-          valueSpan.replaceWith(input);
-          input.focus();
-          input.select();
-          state.typing = true;
-          let done = false, timer = 0;
-          const finish = (value, cancelled) => {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
-            state.typing = false;
-            input.blur();
-            setVar(name, original, cancelled ? shown : value.trim(), false);
-          };
-          input.addEventListener('input', () => {
-            clearTimeout(timer);
-            timer = setTimeout(() => setVar(name, original, input.value.trim(), true), 150);
-          });
-          input.addEventListener('keydown', e => {
-            if (e.key === 'Enter') { e.preventDefault(); finish(input.value); }
-            if (e.key === 'Escape') { e.preventDefault(); finish(shown, true); }
-          });
-          input.addEventListener('blur', () => finish(input.value));
-        });
+        const original = edit ? edit.original : text;
+        valueSpan.addEventListener('click', () => app.editInPlace(valueSpan, shown, (value, live, cancelled) =>
+          setVar(name, original, cancelled ? shown : value.trim(), live)));
       }
       val.append(valueSpan);
       if (r.text != null && r.text !== shown) val.append(' ', el('span', { class: 'r' }, '→ ' + r.text));
