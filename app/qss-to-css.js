@@ -190,8 +190,9 @@
         if (idx !== tokens.length - 1) throw new Error('Sub-control in the middle of a selector (Qt rejects this rule too)');
         subcontrol = sub;
         const sc = `[data-sc=${cssStr(sub)}]${subStates}`;
-        // A sub-control is a direct child of its widget, or of its viewport.
-        css += `:is(${owner} > ${sc}, ${owner} > [data-viewport] > ${sc})`;
+        // A sub-control is a direct child of its widget or of its viewport, or sits in
+        // another sub-control (an arrow in its button, as Qt positions it).
+        css += `:is(${owner} > ${sc}, ${owner} > [data-viewport] > ${sc}, ${owner} > [data-sc] > ${sc})`;
       } else {
         css += owner;
       }

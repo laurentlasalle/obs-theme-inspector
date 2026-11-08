@@ -4,7 +4,7 @@ See how an OBS Studio theme (`.obt`, `.ovt`, `.oha`) styles the OBS interface, i
 
 OBS draws its interface with Qt, whose style sheets look like CSS but run outside the browser. Finding the right selector for a widget usually means guessing from OBS's source code. This tool rebuilds the OBS main window as HTML, applies your theme to it, and shows the rules that reach any element you hover, in the order Qt applies them.
 
-> **Work in progress.** The tool is usable but incomplete: only the Scenes dock of the main window is drawn so far, and the rest (Sources, Audio Mixer, Controls, Transitions, preview, status bar and menu bar) will follow. Expect rough edges, and changes to how things work from one update to the next.
+> **Work in progress.** The tool is usable but incomplete: the main window is drawn, other windows (Settings, Properties, Filters …) are not, and some widgets are simplified. Expect rough edges, and changes to how things work from one update to the next.
 
 ## Use it
 
@@ -13,7 +13,7 @@ OBS draws its interface with Qt, whose style sheets look like CSS but run outsid
 3. Pick a theme in the **Theme** menu. The themes bundled with OBS 32.2.1 (Yami and its variants) are always available.
 4. To inspect your own theme, click **Add folder…** and choose the folder holding your theme files, or drag them onto the page. Bring the image folders too (for example `LJCS/popout.svg`), so `url(theme:…)` icons can be found.
 
-Your files, settings and pending changes are kept in the browser for next time. **Remove my files** forgets your files and the changes made to them.
+Your files, settings and pending changes are kept in the browser for next time, along with the width of the panel (double-click the divider to restore the default). **Remove my files** forgets your files and the changes made to them.
 
 ### Inspecting
 
@@ -74,13 +74,23 @@ Qt style sheets are then translated to CSS:
 
 What remains an approximation:
 
-- **Layout.** Qt's layouts are imitated with flexbox; sizes can differ by a few pixels.
+- **Layout.** Qt's layouts are imitated with flexbox and grids; sizes can differ by a few pixels.
+- **Painted widgets.** The volume meters and the preview are painted by OBS itself. The mock-up paints them the same way, with the colours the theme gives them (`qproperty-foregroundNominalColor`, `qproperty-displayBackgroundColor` …), but with fixed levels.
 - **Unstyled parts.** What a theme does not style is drawn by Qt's own style ("windowsvista" on Windows); the mock-up only imitates it.
-- **Qt-only properties.** `qproperty-icon`, `titlebar-close-icon`, `titlebar-normal-icon`, `icon-size` and `image` are applied by script. Others are listed in the **Problems** tab when they cannot be translated.
+- **Qt-only properties.** `qproperty-icon`, the source icons of `OBSBasic` (`qproperty-gameCapIcon` …), `titlebar-close-icon`, `titlebar-normal-icon`, `icon-size` and `image` are applied by script. Others are listed in the **Problems** tab when they cannot be translated.
 
 ## Scope
 
-The mock-up currently contains the **Scenes** dock. The rest of the main window (Sources, Audio Mixer, Controls, Transitions, preview, status bar, menu bar) comes next.
+The mock-up is the OBS 32.2.1 main window in its default layout: menu bar, **Scenes** and **Sources** on the left, the preview with its zoom bar and the source context bar, then **Audio Mixer**, **Scene Transitions** and **Controls** along the bottom, and the status bar.
+
+It can be used like the real window: select scenes and sources, toggle a source's visibility or lock, start buttons, and use the mute and monitoring buttons of the mixer, which follow OBS's rules. The mixer shows every state a track can be in:
+
+- **Desktop Audio**: playing normally.
+- **Mic/Aux**: muted.
+- **Alerts**: monitored only (Monitor Only in Advanced Audio Properties): the mute button shows a warning.
+- **Music**: monitored and output, but inactive.
+
+Not drawn yet: menus once opened, other windows (Settings, Properties, Filters …), Studio Mode, the vertical mixer layout.
 
 ## Updating the bundled OBS themes
 

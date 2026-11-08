@@ -30,7 +30,7 @@
     selected: null,             // element shown in the inspector
     locked: false,
     settings: { themeId: 'com.obsproject.Yami.Classic', fontScale: 10, density: 4, os: 'win', zoom: 1,
-                highContrast: false, author: '' },
+                highContrast: false, author: '', panelWidth: null },
     editsByTheme: {},           // theme id -> edits (see editor.js)
     registered: new Set(),
     urlCache: new Map(),
@@ -103,7 +103,9 @@
       const ext = path.split('.').pop().toLowerCase();
       return `data:image/${ext === 'svg' ? 'svg+xml' : ext};base64,${content.slice(7)}`;
     }
-    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(content);
+    // Parentheses and quotes escaped too: the URL is read back from CSS values.
+    return 'data:image/svg+xml;charset=utf-8,' +
+      encodeURIComponent(content).replace(/[()'!*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
   }
 
   function lookupTheme(rel) {
@@ -331,6 +333,7 @@
 
     requestAnimationFrame(() => {
       applyIcons();
+      M.paintAll($('#stage'));
       if (state.selected) select(state.selected);
       if (!live) app.renderAll();
     });
@@ -352,9 +355,16 @@
 
   function applyIcons() {
     const stage = $('#stage');
-    for (const node of stage.querySelectorAll('[data-icon-default]')) {
+    // Source icons are properties of the main window (qproperty-gameCapIcon …).
+    const mainWindow = stage.querySelector('[data-t~="QMainWindow"]');
+    const windowStyle = mainWindow ? getComputedStyle(mainWindow) : null;
+    const dark = !!(state.compiled && state.compiled.theme && state.compiled.theme.dark);
+    for (const node of stage.querySelectorAll('[data-icon-default], [data-icon-qp]')) {
       const cs = getComputedStyle(node);
       const url = cssUrl(cs.getPropertyValue('--qp-icon')) || cssUrl(cs.getPropertyValue('--q-icon')) ||
+                  (node.dataset.iconQp && windowStyle &&
+                   cssUrl(windowStyle.getPropertyValue('--qp-' + node.dataset.iconQp.toLowerCase()))) ||
+                  (dark && node.dataset.iconDark && resolveUrl(node.dataset.iconDark)) ||
                   resolveUrl(node.dataset.iconDefault);
       const size = sizeOf(cs.getPropertyValue('--q-icon-size'), +node.dataset.iconSize);
       setIcon(node.querySelector(':scope > .q-icon'), url, size);
@@ -372,6 +382,7 @@
       let img = node.querySelector(':scope > .q-image');
       if (!url && !img) continue;
       if (!img) { img = document.createElement('span'); img.className = 'q-image'; node.prepend(img); }
+      node.classList.toggle('has-image', !!url);
       if (url) {
         img.textContent = ' ';
         img.style.backgroundImage = `url("${url}")`;
@@ -392,7 +403,7 @@
   let iconFrame = 0;
   function scheduleIcons() {
     cancelAnimationFrame(iconFrame);
-    iconFrame = requestAnimationFrame(applyIcons);
+    iconFrame = requestAnimationFrame(() => { applyIcons(); M.paintAll($('#stage')); });
   }
 
   /* ------------------------------------------------------------------ */
@@ -596,13 +607,23 @@
       btn.addEventListener('click', () => app.showTab(btn.dataset.tab));
     }
 
-    // Resizable panel.
+    // Resizable panel; its width is kept with the settings, a double click restores the default.
     const splitter = $('.splitter');
+    const setWidth = w => {
+      if (w) document.documentElement.style.setProperty('--panel-width',
+        Math.max(280, Math.min(window.innerWidth - 300, w)) + 'px');
+      else document.documentElement.style.removeProperty('--panel-width');
+    };
+    setWidth(state.settings.panelWidth);
+    splitter.title = 'Drag to resize; double-click to restore the default width';
+    splitter.addEventListener('dblclick', () => { state.settings.panelWidth = null; setWidth(null); saveStored(); });
     splitter.addEventListener('pointerdown', e => {
       splitter.setPointerCapture(e.pointerId);
-      const move = ev => document.documentElement.style.setProperty('--panel-width',
-        Math.max(280, Math.min(window.innerWidth - 300, window.innerWidth - ev.clientX)) + 'px');
-      const up = () => { splitter.removeEventListener('pointermove', move); splitter.removeEventListener('pointerup', up); };
+      const move = ev => {
+        state.settings.panelWidth = Math.max(280, Math.min(window.innerWidth - 300, window.innerWidth - ev.clientX));
+        setWidth(state.settings.panelWidth);
+      };
+      const up = () => { splitter.removeEventListener('pointermove', move); splitter.removeEventListener('pointerup', up); saveStored(); };
       splitter.addEventListener('pointermove', move);
       splitter.addEventListener('pointerup', up);
     });
@@ -613,6 +634,7 @@
     const win = M.build();
     stage.appendChild(win);
     M.wire(win, () => { scheduleIcons(); app.renderInspector(); });
+    new ResizeObserver(() => scheduleIcons()).observe(win);
 
     stage.addEventListener('mouseover', e => {
       scheduleIcons();
